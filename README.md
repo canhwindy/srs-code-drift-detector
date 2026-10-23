@@ -81,17 +81,6 @@ docker compose up -d --build        # first build takes 10–15 minutes
 
 See [`deploy/README.md`](deploy/README.md) for the full setup, including Nginx and HTTPS.
 
-## Team
-
-Capstone team of five students at FPT University (Hoa Lac campus), 2026:
-
-- **Do Duc Canh** (team leader): gap-finding pipeline and PR webhook service, GitNexus integration,
-  RAG backend fixes, BA dashboard, Docker deployment
-- Nguyen Truong Quan
-- Son Nguyen
-- Nguyen Anh Binh
-- TruongKD
-
 ## Credits and license
 
 - [Outline](https://github.com/outline/outline) by General Outline, Inc. is licensed under the
