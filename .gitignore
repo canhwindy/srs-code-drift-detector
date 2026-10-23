@@ -1,0 +1,72 @@
+dist
+server/logs/*.jsonl
+build
+node_modules/*
+.env.development
+.env
+**/__pycache__
+.venv
+venv
+deploy/deploy.config
+
+.log
+.vscode/*
+npm-debug.log
+stats.json
+.DS_Store
+data/*
+.idea
+*.pem
+*.key
+*.cert
+.claude
+CLIProxyAPI/config.yaml
+
+
+# Test HTML files
+public/images/updateDocument.html
+public/images/listChildDocuments.html
+public/images/getChildren.html
+public/images/createDocument.html
+public/images/commitDraft.html
+
+
+backend/input_document
+backend/rag_storage
+
+# FileSplitApi C# build artifacts
+FileSplitApi/bin/
+FileSplitApi/obj/
+FileSplitApi/*.docx
+FileSplitApi/*.user
+
+
+# Visual Studio
+.vs/
+
+# Yarn Berry
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+
+
+# Git worktrees
+.worktrees/
+.env
+.gitnexus
+
+.early.coverage
+.claude/settings.local.json
+
+# Secrets and local data (never commit)
+.env.*
+!.env.sample
+!.env.test
+gcs-credentials*.json
+*.sql.gz
+docker/postgres/init/dump.sql
+docker/neo4j/
+logs/
+bugs/

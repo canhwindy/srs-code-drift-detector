@@ -1,0 +1,22 @@
+import type { Token } from "markdown-it";
+import type MarkdownIt from "markdown-it";
+import customFence from "markdown-it-container";
+
+export default function notice(md: MarkdownIt) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  customFence(md as any, "notice", {
+    marker: ":",
+    validate: () => true,
+    render(tokens: Token[], idx: number) {
+      const { info } = tokens[idx];
+
+      if (tokens[idx].nesting === 1) {
+        // opening tag
+        return `<div class="notice notice-${md.utils.escapeHtml(info)}">\n`;
+      } else {
+        // closing tag
+        return "</div>\n";
+      }
+    },
+  });
+}

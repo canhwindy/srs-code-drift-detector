@@ -1,0 +1,5 @@
+@import "tailwindcss";
+
+/* Enable class-based dark mode for Tailwind v4.
+   PageTheme.ts adds/removes `.dark` on <html> — this variant maps dark: utilities to that class. */
+@custom-variant dark (&:where(.dark, .dark *));

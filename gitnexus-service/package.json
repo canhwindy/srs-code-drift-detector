@@ -1,0 +1,13 @@
+{
+  "name": "gitnexus-service",
+  "version": "1.0.0",
+  "description": "GitNexus repo lifecycle manager — clone, analyze, pull, delete repos for gap-finding",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "simple-git": "^3.27.0"
+  }
+}

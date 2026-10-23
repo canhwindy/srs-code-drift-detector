@@ -1,0 +1,398 @@
+services:
+  redis:
+    image: redis
+    container_name: outline-redis
+    # Không expose ra host — các service truy cập qua service name `outline-redis:6379`
+    # qua network `outline-network`. Tránh xung đột port 6379 trên VPS/Dokploy.
+    user: "redis:redis"
+    volumes:
+      - redis_data:/data
+    networks:
+      - outline-network
+    restart: unless-stopped
+
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: outline-postgres
+    # Không expose ra host — truy cập qua `outline-postgres:5432` trong network nội bộ.
+    # (Trước đây bind 0.0.0.0:5432 là rủi ro bảo mật — ai scan IP cũng thấy DB.)
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: pass
+      POSTGRES_DB: outline
+      POSTGRES_INITDB_ARGS: "-E UTF8 --locale=en_US.utf8"
+    user: "postgres:postgres"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - outline-network
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U user -d outline" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  neo4j:
+    image: neo4j:5-community
+    container_name: outline-neo4j
+    # Không expose ra host — backend truy cập qua `outline-neo4j:7687` (Bolt).
+    # Nếu cần vào Neo4j Browser: `docker exec -it outline-neo4j cypher-shell` hoặc
+    # tạm thêm lại `ports: - "127.0.0.1:7474:7474"` khi debug.
+    environment:
+      NEO4J_AUTH: neo4j/neo4jpass
+      NEO4J_dbms_memory_heap_max__size: 2G
+      NEO4J_dbms_memory_pagecache_size: 1G
+      NEO4J_dbms_security_procedures_unrestricted: "apoc.*"
+      NEO4J_dbms_security_procedures_allowlist: "apoc.*"
+      NEO4JLABS_PLUGINS: '["apoc"]'
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    networks:
+      - outline-network
+    restart: unless-stopped
+    # entrypoint: ["/bin/bash", "/docker-entrypoint-custom.sh"]
+    healthcheck:
+      test: [ "CMD-SHELL", "cypher-shell -u neo4j -p neo4jpass 'RETURN 1' || exit 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: outline-backend
+    env_file:
+      - .env.production
+      - path: .env
+        required: false
+    # Không bind port ra host — các service gọi qua `outline-backend:8000` trong network.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # ~/.claude.json: Claude CLI config (required at home root)
+      - ~/.claude.json:/root/.claude.json:ro
+
+      # ~/.claude/: OAuth credentials + hooks config
+      - ~/.claude:/root/.claude:ro
+
+      # .claude/: Skills vĂ  CLAUDE.md (project-level)
+      - ./.claude:/app/.claude
+
+      # backend source: mount Ä‘á»ƒ thay Ä‘á»•i code cĂ³ hiá»‡u lá»±c ngay khĂ´ng cáº§n rebuild ./backend:/app/backend
+      - ./backend:/app
+
+    environment:
+      # Claude CLI settings
+      LLM_BINDING: gemini
+      CLAUDE_WORKING_DIR: /app
+      CLAUDE_MAX_TOKENS: ${CLAUDE_MAX_TOKENS:-32000}
+
+      # Database connections (giá»¯ nguyĂªn tá»« .env hoáº·c hardcode cho dev)
+      NEO4J_URI: ${NEO4J_URI:-neo4j://outline-neo4j:7687}
+      NEO4J_USERNAME: ${NEO4J_USERNAME:-neo4j}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-neo4jpass}
+      NEO4J_DATABASE: ${NEO4J_DATABASE:-neo4j}
+
+      # Override DATABASE_URL to use Docker service name instead of localhost
+      DATABASE_URL: postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-pass}@outline-postgres:5432/${POSTGRES_DATABASE:-outline}
+      POSTGRES_HOST: outline-postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pass}
+      POSTGRES_DATABASE: ${POSTGRES_DATABASE:-outline}
+      # Internal API key để gọi Node.js internal endpoint lấy GitHub config từ DB.
+      # KHÔNG override ở đây — phải đọc từ .env.production để match với outline-app.
+      # URL của Node.js Outline server — gọi qua service name trong outline-network
+      OUTLINE_INTERNAL_URL: http://outline-app:3000
+      # GitNexus eval-server REST API — dùng cho gap-finding code intelligence queries
+      GITNEXUS_EVAL_SERVER_URL: http://outline-gitnexus:4848
+      GITNEXUS_SERVICE_URL: http://outline-gitnexus:4747
+      # Embedding — loaded from env_file (.env.local / .env.production)
+
+      # RabbitMQ — kanban implement worker + PR event worker
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASSWORD:-guest}@queue:5672/
+
+      # Pipeline credentials for PR event worker (gap-finding via queue).
+      # PIPELINE_CREDENTIALS_JSON và PIPELINE_CRED_PATH đọc từ .env.production
+      # (không hardcode ở đây để value từ env_file được propagate). Hỗ trợ 2 format:
+      #   - Full JSON: {"claudeAiOauth": {"accessToken": "...", ...}}
+      #   - Raw OAuth token: "sk-ant-oat01-..." (rag_state._parse_claude_credentials xử lý)
+      # Fallback: file tại PIPELINE_CRED_PATH nếu env rỗng.
+      PIPELINE_USER_ID: ${PIPELINE_USER_ID:-pipeline}
+      # Set GAP_FINDING_MOCK=1 to skip Claude/LightRAG and return stub data (for testing)
+
+    networks:
+      - outline-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      gitnexus-service:
+        condition: service_healthy
+      queue:
+        condition: service_healthy
+      cliproxyapi:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -f http://localhost:8000/health || exit 1" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  queue:
+    image: rabbitmq:3.13-management-alpine
+    container_name: outline-queue
+    hostname: queue
+    # Không expose ra host — các service nối qua `queue:5672`.
+    # Muốn xem Management UI: `docker exec` hoặc tạm expose `15672` khi debug.
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - outline-network
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "rabbitmq-diagnostics", "-q", "ping" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  gitnexus-service:
+    build: ./gitnexus-service
+    container_name: outline-gitnexus
+    # Không expose ra host — backend/gapfinding gọi qua `outline-gitnexus:4747/4848`.
+    environment:
+      # Use npx to run gitnexus (global install disabled due to npm 10.x arborist bug)
+      # npx cache is pre-warmed during Docker build via "RUN npx --yes gitnexus --version"
+      GITNEXUS_BIN: npx
+      # Port for `gitnexus serve` — exposes MCP endpoint at http://localhost:4748/api/mcp
+      GITNEXUS_SERVE_PORT: "4748"
+      # Port for `gitnexus eval-server` — exposes REST API for Python backend gap-finding
+      GITNEXUS_EVAL_PORT: "4848"
+      # Index refresh: driven bởi PR merged events (pr_event_worker gọi /api/repos/:name/pull).
+      # Không còn periodic auto-pull nữa.
+    volumes:
+      - gitnexus_repos:/data/repos
+    networks:
+      - outline-network
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -f http://localhost:4747/health || exit 1" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  gapfinding:
+    build:
+      context: ./gap_finding_module
+      dockerfile: Dockerfile
+    container_name: outline-gapfinding
+    # Không bind port ra host — gọi qua `outline-gapfinding:8011` trong network.
+    env_file:
+      - .env.production
+      - path: .env
+        required: false
+    environment:
+      CELERY_BROKER_URL: amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASSWORD:-guest}@queue:5672/
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-rpc://}
+      GAPFINDING_DATABASE_URL: postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-pass}@outline-postgres:5432/gapfinding
+      OUTLINE_URL: http://outline-app:3000
+      BACKEND_URL: http://outline-backend:8000
+      # srs_query_worker.py đọc LIGHTRAG_API_URL để gọi /api/conversations
+      # (LightRAG chat endpoints host ở Python backend).
+      LIGHTRAG_API_URL: http://outline-backend:8000
+      # PIPELINE_API_KEY đọc từ .env.production (không override để đồng bộ với outline-app)
+      GAP_FINDING_TIMEOUT: 1200
+      CELERY_TASK_SOFT_TIME_LIMIT: 1500
+      CELERY_TASK_TIME_LIMIT: 1560
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./gap_finding_module/pr_webhook_module:/app/pr_webhook_module
+    networks:
+      - outline-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      queue:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8011/health')\" || exit 1" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  cliproxyapi:
+    build:
+      context: ./CLIProxyAPI
+      dockerfile: Dockerfile
+    container_name: outline-cliproxyapi
+    # Không expose ra host — outline/backend gọi qua `outline-cliproxyapi:8317`.
+    env_file:
+      - .env.production
+      - path: .env
+        required: false
+    volumes:
+      - cliproxyapi_auths:/root/.cli-proxy-api
+    environment:
+      DEPLOY: ""
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        cat > /CLIProxyAPI/config.yaml <<EOF
+        host: ""
+        port: 8317
+        remote-management:
+          allow-remote: true
+          secret-key: "$${CLIPROXY_MANAGEMENT_KEY}"
+          disable-control-panel: false
+        auth-dir: "/root/.cli-proxy-api"
+        api-keys:
+          - "$${CLIPROXY_API_KEY}"
+        debug: false
+        usage-statistics-enabled: false
+        EOF
+        exec ./CLIProxyAPI
+    networks:
+      - outline-network
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -qO- http://localhost:8317/ > /dev/null || exit 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # ─────────────────────────────────────────────────────────────
+  # Node.js Outline server (web + worker + collab + websockets)
+  # Thay thế cho PM2 "outline" process
+  # ─────────────────────────────────────────────────────────────
+  outline:
+    build:
+      context: .
+      dockerfile: Dockerfile.outline
+    container_name: outline-app
+    env_file:
+      - .env.production
+      - path: .env
+        required: false
+    # Không bind port ra host — Dokploy/Traefik route qua domain đến container:3000.
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+
+      # Override các host connection — chuyển từ localhost sang service name
+      DATABASE_URL: postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-pass}@outline-postgres:5432/${POSTGRES_DATABASE:-outline}
+      POSTGRES_HOST: outline-postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pass}
+      POSTGRES_DATABASE: ${POSTGRES_DATABASE:-outline}
+
+      REDIS_URL: redis://outline-redis:6379
+
+      NEO4J_URI: neo4j://outline-neo4j:7687
+      NEO4J_USERNAME: ${NEO4J_USERNAME:-neo4j}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-neo4jpass}
+
+      MESSAGE_BROKER_URL: amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASSWORD:-guest}@queue:5672/
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASSWORD:-guest}@queue:5672/
+
+      # CLIProxyAPI qua service name
+      CLIPROXY_BASE_URL: http://outline-cliproxyapi:8317
+
+      # Python backend + gitnexus-service qua service name (nội bộ)
+      PYTHON_BACKEND_URL: http://outline-backend:8000
+      GITNEXUS_SERVICE_URL: http://outline-gitnexus:4747
+
+      # Reverse-proxy targets — Node forwards `/python-api`, `/filesplit-api`,
+      # `/cliproxy`, `/gapfinding` to các container trong cùng outline-network.
+      # Dokploy chỉ cần route 1 entry `outline.omelet.tech/` → outline-app:3000.
+      FILE_SPLIT_API_URL: http://outline-filesplit:5000
+      GAPFINDING_BASE_URL: http://outline-gapfinding:8011
+
+      # GCS key path — mount vào /opt/outline/gcs-credentials.json qua volume
+      GCS_KEY_FILE_PATH: /opt/outline/gcs-credentials.json
+
+      # Local file storage path — override ./data từ .env.production
+      FILE_STORAGE_LOCAL_ROOT_DIR: /var/lib/outline/data
+    volumes:
+      - ./gcs-credentials.json:/opt/outline/gcs-credentials.json:ro
+      - outline_data:/var/lib/outline/data
+    networks:
+      - outline-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      neo4j:
+        condition: service_healthy
+      queue:
+        condition: service_healthy
+      cliproxyapi:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -qO- http://localhost:3000/_health | grep -q OK || exit 1" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # ─────────────────────────────────────────────────────────────
+  # FileSplit .NET API (DOCX/PPTX splitter)
+  # Thay thế cho PM2 "filesplit" process
+  # ─────────────────────────────────────────────────────────────
+  filesplit:
+    build:
+      context: .
+      dockerfile: Dockerfile.filesplit
+    container_name: outline-filesplit
+    env_file:
+      - .env.production
+      - path: .env
+        required: false
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      FILE_SPLIT_API_PORT: 5000
+      ASPNETCORE_URLS: http://+:5000
+    # Không bind port ra host — backend gọi qua `outline-filesplit:5000` trong network.
+    networks:
+      - outline-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    name: outline-postgres-data
+  redis_data:
+    name: outline-redis-data
+  neo4j_data:
+    name: outline-neo4j-data
+  neo4j_logs:
+    name: outline-neo4j-logs
+  rabbitmq_data:
+    name: outline-rabbitmq-data
+  gitnexus_repos:
+    name: outline-gitnexus-repos
+  cliproxyapi_auths:
+    name: outline-cliproxyapi-auths
+  outline_data:
+    name: outline-app-data
+
+networks:
+  outline-network:
+    name: outline-network

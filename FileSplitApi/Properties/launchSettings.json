@@ -1,0 +1,11 @@
+{
+  "profiles": {
+    "FileSpilit": {
+      "commandName": "Project",
+      "launchBrowser": true,
+      "environmentVariables": {
+      },
+      "applicationUrl": "https://localhost:57518;http://localhost:57519"
+    }
+  }
+}

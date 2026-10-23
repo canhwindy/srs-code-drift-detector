@@ -1,0 +1,52 @@
+# Dev-only override: Compose tự merge file này khi chạy `docker-compose up`.
+# Dokploy KHÔNG đọc file này (prod chỉ đọc `docker-compose.yml` base).
+#
+# Mở port 127.0.0.1:xxxx trên host để:
+#   - gõ `psql` / `redis-cli` / `cypher-shell` từ máy dev
+#   - chạy `yarn dev` / `uvicorn --reload` ngoài container trỏ về service ở
+#     localhost theo port này
+#
+# Bind 127.0.0.1 (không phải 0.0.0.0) để không lộ DB/Redis ra public net.
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:5432:5432"
+
+  redis:
+    ports:
+      - "127.0.0.1:6379:6379"
+
+  neo4j:
+    ports:
+      - "127.0.0.1:7474:7474"
+      - "127.0.0.1:7687:7687"
+
+  queue:
+    ports:
+      - "127.0.0.1:5672:5672"
+      - "127.0.0.1:15672:15672"
+
+  backend:
+    ports:
+      - "127.0.0.1:8000:8000"
+
+  gitnexus-service:
+    ports:
+      - "127.0.0.1:4747:4747"
+      - "127.0.0.1:4848:4848"
+
+  gapfinding:
+    ports:
+      - "127.0.0.1:8011:8011"
+
+  cliproxyapi:
+    ports:
+      - "127.0.0.1:8317:8317"
+
+  filesplit:
+    ports:
+      - "127.0.0.1:5000:5000"
+
+  outline:
+    ports:
+      - "127.0.0.1:3000:3000"
